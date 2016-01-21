@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no">
+    <meta charset="utf-8">
+    <title>WiFi Locator</title>
+    <style>
+      html, body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+      }
+      #map {
+      	width: 1280px;
+      	margin: 0 auto;
+        height: 720px;
+      }
+    </style>
+    <script type="text/javascript" src="lib/jquery-2.2.0.min.js"></script>
+
+    </script>
+  </head>
+  <body>
+  	<div id="toolbar">
+  		<label><input type="checkbox" checked id="toggleSecureWifi"> Show Secure WiFi</label>
+  	</div>
+    <div id="map"></div>
+    <div id="panel"></div>
+    <script>
+
+    	$('#toggleSecureWifi').change( function ( e ) {
+			for( point in pointHash ){
+				setVisibility( point, pointHash[ point ].free || e.target.checked );
+			}
+    	});
+
+    	var markers = [],
+    		searching = false,
+    		hoyresHusLoc = {
+    			lat: 59.9138208,
+    			lng: 10.7340674
+    		},
+    		map, directionsDisplay, events,
+    		wifis = {}, pointHash = {};
+
+    	function setVisibility( point, visible ) {
+			pointHash[ point ].pin.setVisible( visible );
+			pointHash[ point ].c1.setVisible( visible );
+			pointHash[ point ].c2.setVisible( visible );
+			pointHash[ point ].c3.setVisible( visible );
+    	}
+
+		function initMap() {
+		  map = new google.maps.Map(document.getElementById('map'), {
+		    zoom: 15,
+		    center: hoyresHusLoc
+		  });
+		  directionsDisplay = new google.maps.DirectionsRenderer({
+	    	map: map,
+	    	panel: document.getElementById('panel')
+		  });
+		  window.setInterval( fetchMarkers, 5000 );
+		  fetchMarkers();
+
+		}
+
+		function fetchMarkers () {
+
+			//lets wait til everything resolves.
+			if ( searching )
+				return;
+
+			//raw event log dump of custom params
+			//traffic/data: 043f1c27dfadbe55c647f17c6bb99eacbc9883ff
+
+			var persistentSiteUrl = 'https://api.cxense.com/traffic/data?persisted=043f1c27dfadbe55c647f17c6bb99eacbc9883ff';
+
+			searching = true;
+
+			$.ajax({
+				url: persistentSiteUrl,
+				dataType: 'jsonp'
+			})
+			.done( function ( data ){
+				searching = false;
+				parseMarkers( data.response );
+			})
+			.fail( function () {
+				searching = false;
+				console.error( 'Request failed. =(' );
+			});
+
+		}
+		function parseMarkers( data ) {
+			events = [];
+			var REQUIREDPROPS = ["SSID","Uid","Capabilities","Lat","Long"];
+			data.events.forEach( function ( cxEvent ) {
+				var evt = {},
+					malformed = false;
+				
+				cxEvent.customParameters.forEach( function( cp ) {
+					evt[ cp.group ] = cp.item;
+				});
+
+				REQUIREDPROPS.forEach( function ( propname ) {
+					if ( !evt.hasOwnProperty( propname ) )
+						malformed = true;
+				});
+				evt.Lat = parseFloat( evt.Lat ) + (Math.random()-0.5)/100;
+				evt.Long = parseFloat( evt.Long ) + (Math.random()-0.5)/50;
+				if ( !malformed ){
+					evt.position = {
+						lat: evt.Lat,
+						lng: evt.Long
+					};
+					evt.Uid = [ evt.Uid ];
+					events.push( evt );
+				}
+			});
+			parseEvents();
+			
+		}
+		function parseEvents() {
+			events.forEach (function ( evt ) {
+				if ( typeof wifis[ evt.SSID ] == "undefined" ){
+					wifis[ evt.SSID ] = evt;
+				}
+				else {
+					if ( wifis[ evt.SSID ].Uid.indexOf( evt.Uid[ 0 ] ) == -1 )
+						wifis[ evt.SSID ].Uid.push( evt.Uid[ 0 ] );
+
+				}
+			});
+			updateMarkers();
+		}
+		function getDirections( point ) {
+
+		  // Set destination, origin and travel mode.
+		  var request = {
+		    destination: point.position,
+		    origin: hoyresHusLoc,
+		    travelMode: google.maps.TravelMode.WALKING
+		  };
+		  var directionsService = new google.maps.DirectionsService();
+		  directionsService.route(request, function(response, status) {
+		    if (status == google.maps.DirectionsStatus.OK) {
+		      // Display the route on the map.
+		      directionsDisplay.setDirections(response);
+		    }
+		  });
+		}
+		function addPoint( event ){
+			markers.push( )
+		}
+		function updateMarkers () {
+			//transparent circle.		  
+			for (var wifi in wifis) {
+
+				var point = wifis[ wifi ],
+					pointKey = point.Lat.toString() + point.Long.toString();
+					point.position = {
+						lat: parseFloat( point.Lat ),
+						lng: parseFloat( point.Long )
+					};
+					//dummy up some data.
+					point.free = (point.Capabilities.indexOf( 'WPA' ) == -1);
+					point.strength = Math.random()*20;
+					point.dlspeed = parseInt( Math.random()*150 );
+					point.ulspeed = parseInt( Math.random()*150 );
+					var color = point.free ? '#00FF00' : '#FF0000';
+
+				if ( typeof pointHash[ pointKey ] == 'undefined' ) {
+					var contentString = '<div id="networkinfo">'+
+					      '<h1>' + point.SSID + ( point.free ? ' (open) ' : ' (secure) ' ) +'</h1>'+
+					      '<div id="bodyContent">'+
+					      '<h3>Bandwidth Analysis</h3>'+
+					      '<p>Download: <b>' + point.dlspeed + ' Mbps </b></p>' +
+					      '<p>Upload: <b>' + point.dlspeed + ' Mbps </b></p>' +
+					      '<p>Capabilities: <b>' + point.Capabilities + ' </b></p>' +
+					      '</div>' +
+					      '<div>Spotted by: ' + point.Uid.join('|') + 
+					      '</div>';
+					var infowindow = new google.maps.InfoWindow({
+						    content: contentString
+						  }),
+						pin = new google.maps.Marker({
+							position: point.position,
+							map: map,
+							title: point.SSID.toString(),
+							label: "1"
+						});
+
+					pointHash[ pointKey ] = {
+						free: point.free,
+						infowindow: infowindow,
+						position: point.position,
+						ssid: [point.SSID],
+						pin: pin,
+						c1: new google.maps.Circle({
+						  strokeColor: color,
+						  strokeOpacity: 0,
+						  strokeWeight: 1,
+						  fillColor: color,
+						  fillOpacity: 0.35,
+						  map: map,
+						  center: point.position,
+						  radius: Math.sqrt( point.strength ) * 10 
+						}),
+						c2: new google.maps.Circle({
+						  strokeColor: color,
+						  strokeOpacity: 0,
+						  strokeWeight: 1,
+						  fillColor: color,
+						  fillOpacity: 0.2,
+						  map: map,
+						  center: point.position,
+						  radius: Math.sqrt( point.strength ) * 15
+						}),
+						c3: new google.maps.Circle({
+						  strokeColor: color,
+						  strokeOpacity: 1,
+						  strokeWeight: 1,
+						  fillColor: color,
+						  fillOpacity: 0.2,
+						  map: map,
+						  center: point.position,
+						  radius: Math.sqrt( point.strength ) * 20
+						})
+					};
+					var cbTemplate = function () {
+						var iw =  infowindow,
+							p = pin;
+						return function () {
+							iw.open( map, p );
+						}
+					}
+					var cb = new cbTemplate();
+					pin.addListener( 'click', cb );
+					 
+				}
+				else if ( pointHash[ pointKey ].ssid.indexOf( point.SSID ) == -1 ) {
+					pointHash[ pointKey ].ssid.push( point.SSID )
+					var currentContent = pointHash[ pointKey ].infowindow.getContent();
+						currentContent += "<hr/>"+
+							  '<div id="networkinfo">'+
+						      '<h1>' + point.SSID + ( point.free ? ' (open) ' : ' (secure) ' ) +'</h1>'+
+						      '<div id="bodyContent">'+
+						      '<h3>Bandwidth Analysis</h3>'+
+						      '<p>Download: <b>' + point.dlspeed + ' Mbps </b></p>' +
+						      '<p>Upload: <b>' + point.dlspeed + ' Mbps </b></p>' +
+						      '<p>Capabilities: <b>' + point.Capabilities + ' </b></p>' +
+						      '</div>' +
+						      '<div>Spotted by: ' + point.Uid.join('|') + 
+						      '</div>';
+			        pointHash[ pointKey ].free = pointHash[ pointKey ].free || point.free;
+					pointHash[ pointKey ].infowindow.setContent( currentContent );
+					pointHash[ pointKey ].pin.setLabel( pointHash[ pointKey ].ssid.length.toString() );
+					
+				}
+	  		}
+
+		}
+
+    </script>
+    
+    <script async defer
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAUiYKyXeGO98VFi3s7DiXbaShx4Cjcb5Q&signed_in=true&callback=initMap"></script>
+  	
+  </body>
+</html>
